@@ -52,35 +52,35 @@ void send_file_to_server(int sockfd, const std::string& filepath) {
     std::streamsize file_size = file.tellg();
     file.seekg(0, std::ios::beg);
 
-    // Debug: Confirm file size
-    std::cout << "Sending file: " << filepath << " (Size: " << file_size << " bytes)\n";
-
     // Step 1: Send the filename
-    std::string filename = std::filesystem::path(filepath).filename().string();
+    std::string filename = std::filesystem::path(filepath).filename().string() + "\n";
+    std::cout << "Sending filename: " << filename;
     reliable_send(sockfd, filename.c_str(), filename.size());
 
-    // Step 2: Wait for acknowledgment
-    char ack_buffer[64];
-    memset(ack_buffer, 0, sizeof(ack_buffer));
+    // Acknowledge from server
+    char ack_buffer[64] = {0};
     reliable_recv(sockfd, ack_buffer, sizeof(ack_buffer));
     if (std::string(ack_buffer) != "ACK") {
-        std::cerr << "Failed to receive filename acknowledgment.\n";
+        std::cerr << "Failed to receive filename acknowledgment from server.\n";
         return;
     }
+    std::cout << "Server acknowledged filename.\n";
 
-    // Step 3: Send the file size
-    std::string size_message = std::to_string(file_size);
+    // Step 2: Send the file size
+    std::string size_message = std::to_string(file_size) + "\n";
     reliable_send(sockfd, size_message.c_str(), size_message.size());
+    std::cout << "Sending file size: " << file_size << " bytes\n";
 
-    // Step 4: Wait for acknowledgment
+    // Acknowledge from server
     memset(ack_buffer, 0, sizeof(ack_buffer));
     reliable_recv(sockfd, ack_buffer, sizeof(ack_buffer));
     if (std::string(ack_buffer) != "ACK") {
-        std::cerr << "Failed to receive file size acknowledgment.\n";
+        std::cerr << "Failed to receive file size acknowledgment from server.\n";
         return;
     }
+    std::cout << "Server acknowledged file size.\n";
 
-    // Step 5: Send file data
+    // Step 3: Send the file data
     char buffer[BUFFER_SIZE];
     std::streamsize bytes_sent = 0;
     while (file) {
@@ -88,12 +88,12 @@ void send_file_to_server(int sockfd, const std::string& filepath) {
         std::streamsize bytes_read = file.gcount();
         if (bytes_read > 0) {
             reliable_send(sockfd, buffer, bytes_read);
-            bytes_sent += bytes_read; // Debug: Track bytes sent
+            bytes_sent += bytes_read;
         }
     }
     std::cout << "File data sent (" << bytes_sent << " bytes).\n";
 
-    // Step 6: Wait for final acknowledgment
+    // Final acknowledgment
     memset(ack_buffer, 0, sizeof(ack_buffer));
     reliable_recv(sockfd, ack_buffer, sizeof(ack_buffer));
     if (std::string(ack_buffer) == "TRANSFER_COMPLETE") {
@@ -103,7 +103,6 @@ void send_file_to_server(int sockfd, const std::string& filepath) {
     }
     file.close();
 }
-
 // Function to receive messages from the server
 void receive_messages(int sockfd) {
     char buffer[BUFFER_SIZE];
