@@ -52,6 +52,9 @@ void send_file_to_server(int sockfd, const std::string& filepath) {
     std::streamsize file_size = file.tellg();
     file.seekg(0, std::ios::beg);
 
+    // Debug: Confirm file size
+    std::cout << "Sending file: " << filepath << " (Size: " << file_size << " bytes)\n";
+
     // Step 1: Send the filename
     std::string filename = std::filesystem::path(filepath).filename().string();
     reliable_send(sockfd, filename.c_str(), filename.size());
@@ -79,13 +82,16 @@ void send_file_to_server(int sockfd, const std::string& filepath) {
 
     // Step 5: Send file data
     char buffer[BUFFER_SIZE];
+    std::streamsize bytes_sent = 0;
     while (file) {
         file.read(buffer, sizeof(buffer));
         std::streamsize bytes_read = file.gcount();
         if (bytes_read > 0) {
             reliable_send(sockfd, buffer, bytes_read);
+            bytes_sent += bytes_read; // Debug: Track bytes sent
         }
     }
+    std::cout << "File data sent (" << bytes_sent << " bytes).\n";
 
     // Step 6: Wait for final acknowledgment
     memset(ack_buffer, 0, sizeof(ack_buffer));
@@ -214,7 +220,7 @@ int main() {
                 std::lock_guard<std::mutex> lock(pending_mutex);
                 pending_upload_path = fullpath;
                 std::string filename_only = fullpath.filename().string();
-                std::string command = "Ready to receive " + filename_only + "\n";
+                std::string command = "CMD:SENDFILE Ready to receive " + filename_only + "\n";
                 send(sockfd, command.c_str(), command.size(), 0);
             }
         } else if (input == "/listfiles") {

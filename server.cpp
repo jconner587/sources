@@ -121,10 +121,11 @@ void client_handler(int client_fd) {
 
         // Handle file transfer commands
         std::string command(buffer, bytes_received);
-        if (command.find("Ready to receive") != std::string::npos) {
+        if (command.find("CMD:SENDFILE") != std::string::npos) { // Updated for CMD:SENDFILE
             handle_file_transfer(client_fd);
         } else {
             // Handle other commands
+            std::cout << "Received command: " << command << "\n";
         }
     }
     close(client_fd);
