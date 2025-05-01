@@ -103,6 +103,7 @@ void send_file_to_server(int sockfd, const std::string& filepath) {
     }
     file.close();
 }
+
 // Function to receive messages from the server
 void receive_messages(int sockfd) {
     char buffer[BUFFER_SIZE];
@@ -221,6 +222,7 @@ int main() {
                 std::string filename_only = fullpath.filename().string();
                 std::string command = "CMD:SENDFILE Ready to receive " + filename_only + "\n";
                 send(sockfd, command.c_str(), command.size(), 0);
+                std::cout << "File queued for upload: " << fullpath << "\n";
             }
         } else if (input == "/listfiles") {
             send(sockfd, "/listfiles\n", 11, 0);
