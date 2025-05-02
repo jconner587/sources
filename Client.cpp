@@ -93,5 +93,5 @@ int main() {
     receiveFile(clientSocket, outputFilePath);
 
     close(clientSocket);
-    return 0;
+    return
 }
