@@ -4,14 +4,17 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <filesystem>
 
 #define BUFFER_SIZE 1024
 
+namespace fs = std::filesystem;
+
 // Function to receive a file from the server
-void receiveFile(int serverSocket, const std::string& outputFileName) {
-    std::ofstream file(outputFileName, std::ios::binary);
+void receiveFile(int serverSocket, const std::string& outputFilePath) {
+    std::ofstream file(outputFilePath, std::ios::binary);
     if (!file) {
-        std::cerr << "Error: Unable to create file " << outputFileName << std::endl;
+        std::cerr << "Error: Unable to create file " << outputFilePath << std::endl;
         return;
     }
 
@@ -22,11 +25,11 @@ void receiveFile(int serverSocket, const std::string& outputFileName) {
     }
 
     file.close();
-    std::cout << "File received successfully.\n";
+    std::cout << "File received successfully and saved at: " << outputFilePath << "\n";
 }
 
 int main() {
-    std::string serverIP, outputFileName, requestedFile;
+    std::string serverIP, requestedFile, outputFileName, outputDirectory;
     int port;
 
     // Get user input for server details
@@ -40,9 +43,22 @@ int main() {
     std::cout << "Enter the name of the file you want to download: ";
     std::getline(std::cin, requestedFile);
 
+    // Get the directory to save the received file
+    std::cout << "Enter the directory to save the received file: ";
+    std::getline(std::cin, outputDirectory);
+
+    // Ensure the directory exists
+    if (!fs::is_directory(outputDirectory)) {
+        std::cerr << "Error: The specified path is not a valid directory.\n";
+        return 1;
+    }
+
     // Get the name to save the received file as
     std::cout << "Enter the name to save the received file as: ";
     std::getline(std::cin, outputFileName);
+
+    // Construct the full output file path
+    std::string outputFilePath = outputDirectory + "/" + outputFileName;
 
     int clientSocket;
     struct sockaddr_in serverAddr;
@@ -74,7 +90,7 @@ int main() {
 
     // Receive the file
     std::cout << "Downloading file...\n";
-    receiveFile(clientSocket, outputFileName);
+    receiveFile(clientSocket, outputFilePath);
 
     close(clientSocket);
     return 0;
