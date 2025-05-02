@@ -1,241 +1,81 @@
 #include <iostream>
-#include <thread>
-#include <string>
-#include <cstring>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <fstream>
-#include <filesystem>
-#include <sstream>
-#include <mutex>
-#include <optional>
-#include <atomic>
+#include <cstring>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
-// Constants
-constexpr size_t BUFFER_SIZE = 4096;
+#define BUFFER_SIZE 1024
 
-// Global Variables
-std::atomic<bool> running(true);
-std::mutex pending_mutex;
-std::optional<std::filesystem::path> pending_upload_path;
-
-// Reliable send and receive functions
-ssize_t reliable_send(int fd, const char* buffer, size_t length) {
-    size_t total_sent = 0;
-    while (total_sent < length) {
-        ssize_t sent = send(fd, buffer + total_sent, length - total_sent, 0);
-        if (sent <= 0) return sent; // Error or connection closed
-        total_sent += sent;
-    }
-    return total_sent;
-}
-
-ssize_t reliable_recv(int fd, char* buffer, size_t length) {
-    size_t total_received = 0;
-    while (total_received < length) {
-        ssize_t received = recv(fd, buffer + total_received, length - total_received, 0);
-        if (received <= 0) return received; // Error or connection closed
-        total_received += received;
-    }
-    return total_received;
-}
-
-// Function to send a file to the server
-void send_file_to_server(int sockfd, const std::string& filepath) {
-    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open file: " << filepath << "\n";
+// Function to receive a file from the server
+void receiveFile(int serverSocket, const std::string& outputFileName) {
+    std::ofstream file(outputFileName, std::ios::binary);
+    if (!file) {
+        std::cerr << "Error: Unable to create file " << outputFileName << std::endl;
         return;
     }
 
-    std::streamsize file_size = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    // Step 1: Send the filename
-    std::string filename = std::filesystem::path(filepath).filename().string() + "\n";
-    std::cout << "Sending filename: " << filename;
-    reliable_send(sockfd, filename.c_str(), filename.size());
-
-    // Acknowledge from server
-    char ack_buffer[64] = {0};
-    reliable_recv(sockfd, ack_buffer, sizeof(ack_buffer));
-    if (std::string(ack_buffer) != "ACK") {
-        std::cerr << "Failed to receive filename acknowledgment from server.\n";
-        return;
-    }
-    std::cout << "Server acknowledged filename.\n";
-
-    // Step 2: Send the file size
-    std::string size_message = std::to_string(file_size) + "\n";
-    reliable_send(sockfd, size_message.c_str(), size_message.size());
-    std::cout << "Sending file size: " << file_size << " bytes\n";
-
-    // Acknowledge from server
-    memset(ack_buffer, 0, sizeof(ack_buffer));
-    reliable_recv(sockfd, ack_buffer, sizeof(ack_buffer));
-    if (std::string(ack_buffer) != "ACK") {
-        std::cerr << "Failed to receive file size acknowledgment from server.\n";
-        return;
-    }
-    std::cout << "Server acknowledged file size.\n";
-
-    // Step 3: Send the file data
     char buffer[BUFFER_SIZE];
-    std::streamsize bytes_sent = 0;
-    while (file) {
-        file.read(buffer, sizeof(buffer));
-        std::streamsize bytes_read = file.gcount();
-        if (bytes_read > 0) {
-            reliable_send(sockfd, buffer, bytes_read);
-            bytes_sent += bytes_read;
-        }
+    int bytesReceived;
+    while ((bytesReceived = recv(serverSocket, buffer, BUFFER_SIZE, 0)) > 0) {
+        file.write(buffer, bytesReceived);
     }
-    std::cout << "File data sent (" << bytes_sent << " bytes).\n";
 
-    // Final acknowledgment
-    memset(ack_buffer, 0, sizeof(ack_buffer));
-    reliable_recv(sockfd, ack_buffer, sizeof(ack_buffer));
-    if (std::string(ack_buffer) == "TRANSFER_COMPLETE") {
-        std::cout << "File transfer completed successfully.\n";
-    } else {
-        std::cerr << "File transfer failed.\n";
-    }
     file.close();
+    std::cout << "File received successfully.\n";
 }
 
-// Function to receive messages from the server
-void receive_messages(int sockfd) {
-    char buffer[BUFFER_SIZE];
-    std::string partial_message;
-
-    while (running) {
-        memset(buffer, 0, sizeof(buffer));
-        int bytes_received = recv(sockfd, buffer, sizeof(buffer), 0);
-
-        if (bytes_received > 0) {
-            partial_message.append(buffer, bytes_received);
-
-            while (true) {
-                size_t newline_pos = partial_message.find('\n');
-                if (newline_pos == std::string::npos) break;
-
-                std::string line = partial_message.substr(0, newline_pos + 1);
-                partial_message.erase(0, newline_pos + 1);
-
-                if (line.find("Ready to receive ") != std::string::npos) {
-                    std::filesystem::path file_to_send;
-                    {
-                        std::lock_guard<std::mutex> lock(pending_mutex);
-                        if (pending_upload_path) {
-                            file_to_send = *pending_upload_path;
-                            pending_upload_path.reset();
-                        } else {
-                            std::cerr << "No file queued for upload despite acknowledgment.\n";
-                            continue;
-                        }
-                    }
-
-                    send_file_to_server(sockfd, file_to_send.string());
-                } else {
-                    std::cout << line;
-                }
-
-                std::cout.flush();
-            }
-        } else if (bytes_received == 0) {
-            std::cout << "Server closed the connection.\n";
-            running = false;
-            break;
-        } else {
-            std::cerr << "Connection error.\n";
-            running = false;
-            break;
-        }
-    }
-}
-
-// Function to show available commands
-void show_help() {
-    std::cout << "\nCommands:\n"
-              << "/quit                 - Disconnect\n"
-              << "/sendfile <filepath>  - Upload a file to the server\n"
-              << "/listfiles            - List available files on the server\n"
-              << "/help                 - Show this help menu\n\n";
-}
-
-// Main function
 int main() {
-    std::string server_ip;
+    std::string serverIP, outputFileName, requestedFile;
     int port;
 
-    std::cout << "Enter server IP (e.g., 127.0.0.1): ";
-    std::getline(std::cin, server_ip);
-
+    // Get user input for server details
+    std::cout << "Enter server IP address: ";
+    std::cin >> serverIP;
     std::cout << "Enter server port: ";
     std::cin >> port;
-    std::cin.ignore();
+    std::cin.ignore(); // Ignore the newline character left in the buffer
 
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        std::cerr << "Failed to create socket.\n";
+    // Get the file name to request from the server
+    std::cout << "Enter the name of the file you want to download: ";
+    std::getline(std::cin, requestedFile);
+
+    // Get the name to save the received file as
+    std::cout << "Enter the name to save the received file as: ";
+    std::getline(std::cin, outputFileName);
+
+    int clientSocket;
+    struct sockaddr_in serverAddr;
+
+    // Create socket
+    clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (clientSocket < 0) {
+        std::cerr << "Error: Cannot create socket.\n";
         return 1;
     }
 
-    sockaddr_in server_addr{};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
 
-    if (inet_pton(AF_INET, server_ip.c_str(), &server_addr.sin_addr) <= 0) {
-        std::cerr << "Invalid IP address.\n";
-        close(sockfd);
+    // Convert IP address from text to binary
+    if (inet_pton(AF_INET, serverIP.c_str(), &serverAddr.sin_addr) <= 0) {
+        std::cerr << "Error: Invalid address.\n";
         return 1;
     }
 
-    std::cout << "Connecting to server...\n";
-    if (connect(sockfd, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        std::cerr << "Connection failed.\n";
-        close(sockfd);
+    // Connect to server
+    if (connect(clientSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+        std::cerr << "Error: Connection failed.\n";
         return 1;
     }
 
-    std::cout << "Connected to the server.\n";
+    // Send the requested file name to the server
+    send(clientSocket, requestedFile.c_str(), requestedFile.size(), 0);
 
-    std::thread receiver(receive_messages, sockfd);
+    // Receive the file
+    std::cout << "Downloading file...\n";
+    receiveFile(clientSocket, outputFileName);
 
-    std::string input;
-    while (running) {
-        std::getline(std::cin, input);
-        if (input == "/quit") {
-            send(sockfd, "[Client disconnected]\n", 23, 0);
-            running = false;
-            break;
-        } else if (input == "/help") {
-            show_help();
-        } else if (input.rfind("/sendfile ", 0) == 0) {
-            std::filesystem::path fullpath = input.substr(10);
-            if (!std::filesystem::exists(fullpath)) {
-                std::cerr << "File not found: " << fullpath << "\n";
-            } else {
-                std::lock_guard<std::mutex> lock(pending_mutex);
-                pending_upload_path = fullpath;
-                std::string filename_only = fullpath.filename().string();
-                std::string command = "CMD:SENDFILE Ready to receive " + filename_only + "\n";
-                send(sockfd, command.c_str(), command.size(), 0);
-                std::cout << "File queued for upload: " << fullpath << "\n";
-            }
-        } else if (input == "/listfiles") {
-            send(sockfd, "/listfiles\n", 11, 0);
-        } else if (!input.empty()) {
-            input += "\n";
-            send(sockfd, input.c_str(), input.size(), 0);
-        }
-    }
-
-    shutdown(sockfd, SHUT_RDWR);
-    close(sockfd);
-    if (receiver.joinable()) receiver.join();
-
-    std::cout << "Connection closed.\n";
+    close(clientSocket);
     return 0;
 }
